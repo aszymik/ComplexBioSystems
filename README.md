@@ -1,2 +1,1 @@
-# ComplexBioSystems
-Modeling of complex biological systems
+# Modeling of Complex Biological Systems

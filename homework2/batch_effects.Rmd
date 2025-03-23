@@ -389,23 +389,23 @@ ggplot(modcombat_tidy %>% filter(term == "as.factor(pheno$cancer)Cancer")) + geo
 >Second, create a linear model with a genetic strain (biological variables) on **corrected** gene expression data from ComBat. Make a scatter plots of coefficients and a histogram of p-values as done in this notebook. Make sure that you are pulling out the correct coefficients, not any or all coefficients. 
 
 ```{r homework 4}
-edata <- as.matrix(exprs(bottomly.eset))
-edata <- edata[rowMeans(edata) > 10, ]
-edata <- log2(as.matrix(edata) + 1)
-pheno <- pData(bottomly.eset)
+edata_bottomly <- as.matrix(exprs(bottomly.eset))
+edata_bottomly <- edata_bottomly[rowMeans(edata_bottomly) > 10, ]
+edata_bottomly <- log2(as.matrix(edata_bottomly) + 1)
+pheno_bottomly <- pData(bottomly.eset)
 
 # Linear model with uncorrected gene expression data
-mod <- lm(t(edata) ~ as.factor(pheno$strain) + as.factor(pheno$experiment.number))
-mod_tidy <- tidy(mod)
+mod_uncorr <- lm(t(edata_bottomly) ~ as.factor(pheno_bottomly$strain) + as.factor(pheno_bottomly$experiment.number))
+mod_uncorr_tidy <- tidy(mod_uncorr)
 
-combat_edata <- ComBat(dat=edata, batch=pheno$experiment.number, mod=model.matrix(~1, data=pheno), par.prior=TRUE)
-modcombat <- lm(t(combat_edata) ~ as.factor(pheno$strain))
-modcombat_tidy <- tidy(modcombat)
+combat_bottomly <- ComBat(dat=edata_bottomly, batch=pheno_bottomly$experiment.number, mod=model.matrix(~1, data=pheno_bottomly), par.prior=TRUE)
+mod_combat_bottomly <- lm(t(combat_bottomly) ~ as.factor(pheno_bottomly$strain))
+mod_combat_tidy <- tidy(mod_combat_bottomly)
 
 # Compare coefficients
 est_compare <- tibble(
-  LinearModel = mod_tidy %>% filter(term == "as.factor(pheno$strain)DBA/2J") %>% select("estimate") %>% unlist,
-  ComBat = modcombat_tidy %>% filter(term == "as.factor(pheno$strain)DBA/2J") %>% select("estimate") %>% unlist)
+  LinearModel = mod_uncorr_tidy %>% filter(term == "as.factor(pheno_bottomly$strain)DBA/2J") %>% select("estimate") %>% unlist,
+  ComBat = mod_combat_tidy %>% filter(term == "as.factor(pheno_bottomly$strain)DBA/2J") %>% select("estimate") %>% unlist)
 
 pdf('szymik_problem4a.pdf', height=10, width=10)
 ggplot(est_compare, aes(x=LinearModel, y=ComBat)) + 
@@ -417,13 +417,13 @@ dev.off()
 
 # P-values for the uncorrected model
 pdf('szymik_problem4b.pdf', height=10, width=10)
-ggplot(mod_tidy %>% filter(term == "as.factor(pheno$strain)DBA/2J")) + 
+ggplot(mod_uncorr_tidy %>% filter(term == "as.factor(pheno_bottomly$strain)DBA/2J")) + 
     geom_histogram(aes(x=p.value), bins = 100, fill="darkorange")
 dev.off()
 
 # P-values for the combat--corrected model
 pdf('szymik_problem4c.pdf', height=10, width=10)
-ggplot(modcombat_tidy %>% filter(term == "as.factor(pheno$strain)DBA/2J")) + 
+ggplot(mod_combat_tidy %>% filter(term == "as.factor(pheno_bottomly$strain)DBA/2J")) + 
     geom_histogram(aes(x=p.value), bins = 100, fill="darkorange")
 dev.off()
 ```
@@ -553,5 +553,34 @@ ggplot(pvalues_gather, aes(x=value)) + geom_histogram() + facet_wrap(~key)
 > Apply ComBat and SVA to the Bottomly et al. data. Make a scatter plots of coefficients and a histogram of p-values, comparing results based on ComBat and SVA. Assume that the biological variables in Bottomly et al data is the genetic strains. Make sure that you are pulling out the correct coefficients/pvalues, not any or all of them.
 
 ```{r homework 5}
+# Combat p-values
+pdf('szymik_problem5a.pdf', height=10, width=10)
+ggplot(mod_combat_tidy %>% filter(term == "as.factor(pheno_bottomly$strain)DBA/2J")) + geom_histogram(aes(x=p.value), bins = 100, fill="darkorange") + labs(title='Distribution of ComBat p-values')
+dev.off()
 
+# SVA
+mod_sva_bottomly = model.matrix(~as.factor(strain),data=pheno_bottomly)
+mod_sva_0 = model.matrix(~1, data=pheno_bottomly)
+sva_output = sva(edata_bottomly, mod_sva_bottomly, mod_sva_0, n.sv=num.sv(edata_bottomly, mod_sva_bottomly, method="leek"))
+
+# P-values histogram
+mod_sva = lm(t(edata_bottomly) ~ as.factor(pheno_bottomly$strain) + sva_output$sv)
+mod_sva_tidy <- tidy(mod_sva)
+
+pdf('szymik_problem5b.pdf', height=10, width=10)
+ggplot(mod_sva_tidy %>% filter(term == "as.factor(pheno_bottomly$strain)DBA/2J")) + geom_histogram(aes(x=p.value), bins = 100, fill="darkorange") + labs(title='Distribution of SVA p-values')
+dev.off()
+
+# Scatter plot of coefficients
+est_compare <- tibble(
+  SVA = mod_sva_tidy %>% filter(term == "as.factor(pheno_bottomly$strain)DBA/2J") %>% select("estimate") %>% unlist,
+  ComBat = mod_combat_tidy %>% filter(term == "as.factor(pheno_bottomly$strain)DBA/2J") %>% select("estimate") %>% unlist)
+
+pdf('szymik_problem5c.pdf', height=10, width=10)
+ggplot(est_compare, aes(x=SVA, y=ComBat)) + 
+    geom_point(col="darkgrey", alpha=.5, size=.5) + 
+    geom_abline(intercept=0, slope=1, col="darkred") + 
+    geom_smooth(method = "lm", se = TRUE) + 
+    theme_bw()
+dev.off()
 ```

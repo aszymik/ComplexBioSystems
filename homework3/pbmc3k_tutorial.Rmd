@@ -39,15 +39,19 @@ We next use the count matrix to create a `Seurat` object. The object serves as a
 library(dplyr)
 library(Seurat)
 library(patchwork)
+library(ggplot2)
 # for an error: object ‘markvario’ is not exported by 'namespace:spatstat'
-#remotes::install_version("spatstat", version = "1.64-1")
+# remotes::install_version("spatstat", version = "1.64-1")
+```
 
+```{r load_dataset}
 # Load the PBMC dataset
 pbmc.data <- Read10X(data.dir = "filtered_gene_bc_matrices/hg19/")
 # Initialize the Seurat object with the raw (non-normalized data).
 pbmc <- CreateSeuratObject(counts = pbmc.data, project = "pbmc3k", min.cells = 3, min.features = 200)
 pbmc
 ```
+
 <details>
   <summary>**What does data in a count matrix look like?**</summary>
 
@@ -369,7 +373,20 @@ plot <- DimPlot(pbmc, reduction = "umap", label = TRUE, label.size = 4.5) + xlab
   theme(axis.title = element_text(size = 18), legend.text = element_text(size = 18)) + 
   guides(colour = guide_legend(override.aes = list(size = 10)))
 plot
-ggsave(filename = "pbmc3k_umap.jpg", height = 7, width = 12, plot = plot, quality = 50)
+```
+
+```{r memory}
+rm(pbmc)
+rm(pbmc.data)
+rm(pbmc.markers)
+rm(plot)
+rm(plot1)
+rm(plot2)
+rm(all.genes)
+rm(top10)
+rm(cluster1.markers)
+rm(cluster5.markers)
+gc()
 ```
 
 # Homework
@@ -392,94 +409,151 @@ Present the t-SNE visualization with 10 clusters as defined by K-means clusterin
 Reproduce Figure 3 but note difference in results: https://www.nature.com/articles/ncomms14049/figures/3
 
 ```{r load data}
-# Load the PBMC dataset
-pbmc.data <- Read10X(data.dir = "filtered_gene_bc_matrices/hg19/")
-# Initialize the Seurat object with the raw (non-normalized data).
-pbmc <- CreateSeuratObject(counts = pbmc.data, project = "pbmc3k", min.cells = 3, min.features = 200)
-pbmc
+# Load the dataset
+pbmcZheng.data <- Read10X(data.dir = "filtered_matrices_zheng/hg19/")
+
+# Initialize the Seurat object with the raw (non-normalized data)
+pbmcZheng <- CreateSeuratObject(counts = pbmcZheng.data, project = "pbmc68k", min.cells = 3, min.features = 200)
+pbmcZheng
+
+rm(pbmcZheng.data) # clean memory
+gc()
 ```
 
-## QC and selecting cells for further analysis
+## QC and cell selection
 
-Seurat allows you to easily explore QC metrics and filter cells based on any user-defined criteria. A few QC metrics [commonly used](https://www.ncbi.nlm.nih.gov/pmc/articles/PMC4758103/) by the community include
-
-* The number of unique genes detected in each cell. 
-    + Low-quality cells or empty droplets will often have very few genes
-    + Cell doublets or multiplets may exhibit an aberrantly high gene count
-* Similarly, the total number of molecules detected within a cell (correlates strongly with unique genes)
-* The percentage of reads that map to the mitochondrial genome
-    + Low-quality / dying cells often exhibit extensive mitochondrial contamination
-    + We calculate mitochondrial QC metrics with the `PercentageFeatureSet()` function, which calculates the percentage of counts originating from a set of features
-    + We use the set of all genes starting with `MT-` as a set of mitochondrial genes
-
-```{r mito, fig.height=7, fig.width=13}
-# The [[ operator can add columns to object metadata. This is a great place to stash QC stats
-pbmc[["percent.mt"]] <- PercentageFeatureSet(pbmc, pattern = "^MT-")
-```
-
-<details>
-  <summary>**Where are QC metrics stored in Seurat?**</summary>
-
-* The number of unique genes and total molecules are automatically calculated during `CreateSeuratObject()`
-    + You can find them stored in the object meta data
-    
 ```{r qc, fig.height=7, fig.width=13}
-# Show QC metrics for the first 5 cells
-head(pbmc@meta.data, 5)
-```
-</details>
-  
+# Stash QC stats
+pbmcZheng[["percent.mt"]] <- PercentageFeatureSet(pbmcZheng, pattern = "^MT-")
 
-In the example below, we visualize QC metrics, and use these to filter cells.
+# Visualize QC metrics as a violin plot
+VlnPlot(pbmcZheng, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol=3, alpha=0.1)
 
-* We filter cells that have unique feature counts over 2,500 or less than 200
-* We filter cells that have >5% mitochondrial counts
-    
-```{r qc2, fig.height=7, fig.width=13}
-
-#Visualize QC metrics as a violin plot
-VlnPlot(pbmc, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol = 3)
-
-# FeatureScatter is typically used to visualize feature-feature relationships, but can be used for anything calculated by the object, i.e. columns in object metadata, PC scores etc.
-
-plot1 <- FeatureScatter(pbmc, feature1 = "nCount_RNA", feature2 = "percent.mt") 
-plot2 <- FeatureScatter(pbmc, feature1 = "nCount_RNA", feature2 = "nFeature_RNA") 
-plot1 + plot2
-
-pbmc <- subset(pbmc, subset = nFeature_RNA > 200 & nFeature_RNA < 2500 & percent.mt < 5)
+FeatureScatter(pbmcZheng, feature1 = "nCount_RNA", feature2 = "percent.mt") + FeatureScatter(pbmcZheng, feature1 = "nCount_RNA", feature2 = "nFeature_RNA")
 ```
 
-***
+Based on the plots, let's filter the cells that have unique feature counts over 1,500 or less than 200 and the ones that have more than 5% mitochondrial counts.
 
-# Normalizing the data
+```{r cell_selection}
+pbmcZheng <- subset(pbmcZheng, subset = nFeature_RNA > 200 & nFeature_RNA < 1500 & percent.mt < 5)
+```
 
-After removing unwanted cells from the dataset, the next step is to normalize the data. By default, we employ a global-scaling normalization method "LogNormalize" that normalizes the feature expression measurements for each cell by the total expression, multiplies this by a scale factor (10,000 by default), and log-transforms the result. Normalized values are stored in `pbmc[["RNA"]]@data`.
+## Normalizing the data
 
 ```{r normalize}
-pbmc <- NormalizeData(pbmc, normalization.method = "LogNormalize", scale.factor = 1e4)
-```
-For clarity, in this previous line of code (and in future commands), we provide the default values for certain parameters in the function call. However, this isn't required and the same behavior can be achieved with:
-
-```{r normalize.default, eval = FALSE}
-pbmc <- NormalizeData(pbmc)
+pbmcZheng <- NormalizeData(pbmcZheng)
 ```
 
-# Identification of highly variable features (feature selection)
-
-We next calculate a subset of features that exhibit high cell-to-cell variation in the dataset (i.e, they are highly expressed in some cells, and lowly expressed in others). We and [others](https://www.nature.com/articles/nmeth.2645) have found that focusing on these genes in downstream analysis helps to highlight biological signal in single-cell datasets.
-
-Our procedure in Seurat is described in detail [here](https://doi.org/10.1016/j.cell.2019.05.031), and improves on previous versions by directly modeling the mean-variance relationship inherent in single-cell data, and is implemented in the `FindVariableFeatures()` function. By default, we return 2,000 features per dataset. These will be used in downstream analysis, like PCA.
+## Highly variable features selection
 
 ```{r var_features, fig.height=5, fig.width=11}
-pbmc <- FindVariableFeatures(pbmc, selection.method = 'vst', nfeatures = 2000)
+pbmcZheng <- FindVariableFeatures(pbmcZheng, selection.method = 'vst', nfeatures = 1000)  # top 1,000 variable genes as Zheng et al. have done
+```
 
-# Identify the 10 most highly variable genes
-top10 <- head(VariableFeatures(pbmc), 10)
+## Scaling the data
 
-# plot variable features with and without labels
-plot1 <- VariableFeaturePlot(pbmc)
-plot2 <- LabelPoints(plot = plot1, points = top10, repel = TRUE)
-plot1 + plot2
+```{r regress, fig.height=7, fig.width=11, results='hide'}
+pbmcZheng <- ScaleData(pbmcZheng)  # using all genes caused R termination
+```
+
+## PCA
+
+```{r pca, results='hide'}
+pbmcZheng <- RunPCA(pbmcZheng) # PCA on top 1,000 variable features
+```
+
+```{r pca_viz, message=TRUE}
+# Examine and visualize PCA results a few different ways
+print(pbmcZheng[['pca']], dims = 1:5, nfeatures = 5)
+VizDimLoadings(pbmcZheng, dims = 1:2, reduction = 'pca')
+DimPlot(pbmcZheng, reduction = 'pca')
+DimHeatmap(pbmcZheng, dims = 1:15, cells = 500, balanced = TRUE)
+```
+
+## Determine the 'dimensionality' of the dataset
+
+### Jackstraw
+
+```{r jackstraw, fig.height=6, fig.width=10}
+# NOTE: This process can take a long time for big datasets, comment out for expediency. More approximate techniques such as those implemented in ElbowPlot() can be used to reduce computation time
+pbmcZheng <- JackStraw(pbmcZheng, num.replicate = 50)
+pbmcZheng <- ScoreJackStraw(pbmcZheng, dims = 1:20)  # thresholding
+```
+
+```{r jsplots, fig.height=6, fig.width=10}
+JackStrawPlot(pbmcZheng, dims = 1:20)
+```
+
+### Elbow plot
+
+```{r elbow_plot, fig.height=6, fig.width=10}
+ElbowPlot(pbmcZheng)
+```
+
+Based on the above plots, I would choose about 12 PCs as a cutoff. However, in their analysis Zheng et al. used 50 PCs, so let's stick to this number to try to recreate their results.
+
+## K-means clustering
+
+```{r kmeans}
+pca.embeddings <- Embeddings(pbmcZheng, reduction = "pca")[, 1:50]
+
+# K-means clustering with 10 clusters
+set.seed(412)
+kmeans.result <- kmeans(pca.embeddings, centers = 10)
+
+# Add K-means cluster labels to the Seurat object
+pbmcZheng$kmeans_clusters <- as.factor(kmeans.result$cluster)
+
+# Set the K-means clusters as active identity
+Idents(pbmcZheng) <- "kmeans_clusters"
+
+# Look at cluster IDs of the first 5 cells
+head(Idents(pbmcZheng), 5)
+```
+
+## Run tSNE
+
+```{r tsne, fig.height=5, fig.width=7}
+pbmcZheng <- RunTSNE(pbmcZheng, dims = 1:12)  # running tSNE on first 12 PCs gave much better results than 50 like k-means
+```
+
+```{r tsneplot}
+library(ggplot2)
+library(dplyr)
+
+# First, calculate cluster sizes and percentages
+cluster_freq <- table(pbmcZheng$kmeans_clusters)
+cluster_percent <- round(100 * cluster_freq / sum(cluster_freq), 1)
+
+# Create cluster labels with percentages
+cluster_labels <- paste0(names(cluster_freq), " (", cluster_percent, "%)")
+names(cluster_labels) <- names(cluster_freq)
+
+# Replace cluster IDs with formatted labels in Seurat object
+pbmcZheng$kmeans_clusters_labeled <- plyr::mapvalues(pbmcZheng$kmeans_clusters,
+                                                     from = names(cluster_labels),
+                                                     to = cluster_labels)
+
+# Set the new labeled clusters as identities
+Idents(pbmcZheng) <- "kmeans_clusters_labeled"
+
+png("figures/tsne.png", height=500, width=600)
+
+# Plot tSNE with cluster labels
+DimPlot(pbmcZheng, reduction = "tsne", label = TRUE, label.size = 4.5, pt.size = 0.5) +
+  xlab("tSNE 1") + ylab("tSNE 2") +
+  ggtitle("T-SNE with K-means clusters") +
+  NoLegend()
+dev.off()
+
+DimPlot(pbmcZheng, reduction = "tsne", label = TRUE, label.size = 4.5, pt.size = 0.5) +
+  xlab("tSNE 1") + ylab("tSNE 2") +
+  ggtitle("T-SNE with K-means clusters") +
+  NoLegend()
+```
+
+```{r saveobject}
+saveRDS(pbmcZheng, file = "pbmc_Zheng.rds")
 ```
 
 # Homework Problem 2
@@ -493,9 +567,76 @@ Present
 For example, Zheng et al. 2017
 >  To identify subpopulations within the myeloid population, we further applied k-means clustering on the first 50 PCs of cluster 9 cells
 
-<details>
-  <summary>**Session Info**</summary>
-```{r}
-sessionInfo()
+```{r subclustering}
+library(cluster)
+
+subcluster_labels <- rep(NA, ncol(pbmcZheng))  # to keep all subcluster labels
+names(subcluster_labels) <- colnames(pbmcZheng)
+
+# Clustering for each main cluster
+set.seed(42)
+for (main_cluster in levels(pbmcZheng$kmeans_clusters)) {
+  
+  # Subset cells for current main cluster
+  sub_cells <- subset(pbmcZheng, subset = kmeans_clusters == main_cluster)
+  
+  # Get PCA embeddings
+  pca.sub <- Embeddings(sub_cells, reduction = "pca")[, 1:12]
+  
+  # Find best k using silhouette-like method
+  sil_scores <- numeric()
+  for (k in 2:6) {
+    pam_fit <- pam(pca.sub, k = k)
+    sil_scores[k] <- pam_fit$silinfo$avg.width
+  }
+  best_k <- which.max(sil_scores)
+  message("Best k for cluster ", main_cluster, " is: ", best_k)
+  
+  # Final K-means with best k
+  km.final <- kmeans(pca.sub, centers = best_k, nstart = 20)
+  final_ids <- paste0(main_cluster, "_", km.final$cluster)
+  
+  # Store subcluster labels in original cell order
+  subcluster_labels[colnames(sub_cells)] <- final_ids
+}
+
+# Add subcluster labels to the Seurat object
+pbmcZheng$subcluster <- subcluster_labels
 ```
-</details>
+
+```{r visualize subclustering}
+Idents(pbmcZheng) <- "subcluster"
+
+main_clusters <- unique(pbmcZheng$kmeans_clusters)
+
+for (main_cluster in main_clusters) {
+  sub_cells <- subset(pbmcZheng, subset = kmeans_clusters == main_cluster)
+  
+  png(paste0("figures/tsne_cluster", main_cluster, ".png"), height=500, width=600)
+  
+  # tSNE colored by subcluster
+  p <- DimPlot(sub_cells,
+               reduction = "tsne",
+               group.by = "subcluster",
+               label = TRUE,
+               repel = TRUE,
+               pt.size = 0.6) +
+       ggtitle(paste("Cluster", main_cluster, " subclusters"))
+  print(p)
+  dev.off()
+}
+
+```
+
+```{r}
+png("figures/tsne_all_subclusters.png", height=500, width=600)
+DimPlot(pbmcZheng,
+        reduction = "tsne",
+        group.by = "subcluster",
+        label = TRUE,
+        repel = TRUE,
+        pt.size = 0.5) +
+  ggtitle("Overall t-SNE with subcluster labels") +
+  NoLegend()
+dev.off()
+```
